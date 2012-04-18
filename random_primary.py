@@ -173,7 +173,7 @@ class RandomPrimaryIdModel(models.Model):
                 # the args list. So, that's where I get the message string from. Then I do my
                 # DB specific tests on the message string.
                 #
-                msg = e.args[len(e.args)-1]
+                msg = e.args[-1]
                 if msg.endswith("for key 'PRIMARY'") or msg == "column id is not unique" or \
                         "Key (id)=" in msg:
                     transaction.savepoint_rollback(sid) # Needs to be done for Postgres, since
