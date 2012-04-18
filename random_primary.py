@@ -41,6 +41,7 @@ import random
 
 from django.db.utils import IntegrityError
 from django.db       import models, transaction
+from django.db       import transaction
 
 class RandomPrimaryIdModel(models.Model):
     """
@@ -124,7 +125,6 @@ class RandomPrimaryIdModel(models.Model):
                ''.join([ random.choice(self._IDCHARS) for dummy in xrange(0, key_len-1) ]) + \
                self.KEYSUFFIX
 
-    @transaction.commit_on_success
     def save(self, *args, **kwargs):
         """
         Modified save() function, which selects a special unique ID if necessary.
@@ -144,27 +144,54 @@ class RandomPrimaryIdModel(models.Model):
         while try_key_len <= self.CRYPT_KEY_LEN_MAX:
             # Randomly choose a new unique key
             _id = self._make_random_key(try_key_len)
+            sid = transaction.savepoint()       # Needed for Postgres, doesn't harm the others
             try:
                 if kwargs is None:
                     kwargs = dict()
-                kwargs['force_insert'] = True   # If force_insert is already present in
-                                                # kwargs, we want to make sure it's
-                                                # overwritten. Also, by putting it here
-                                                # we can be sure we don't accidentally
-                                                # specify it twice.
+                kwargs['force_insert'] = True           # If force_insert is already present in
+                                                        # kwargs, we want to make sure it's
+                                                        # overwritten. Also, by putting it here
+                                                        # we can be sure we don't accidentally
+                                                        # specify it twice.
                 self.id = _id
                 super(RandomPrimaryIdModel, self).save(*args, **kwargs)
-                break                           # This was a success, so we are done here
+                break                                   # This was a success, so we are done here
 
-            except IntegrityError:              # Apparently, this key is already in use
-                self._retry_count += 1
-                try_since_last_key_len_increase += 1
-                if try_since_last_key_len_increase == try_key_len:
-                    # Every key-len tries, we increase the key length by 1.
-                    # This means we only try a few times at the start, but then try more
-                    # and more for larger key sizes.
-                    try_key_len += 1
-                    try_since_last_key_len_increase = 0
+            except IntegrityError, e:                   # Apparently, this key is already in use
+                # Only way to differentiate between different IntegrityErrors is to look
+                # into the message string. Too bad. But I need to make sure I only catch
+                # the ones for the 'id' column.
+                #
+                # Sadly, error messages from different databases look different and Django does
+                # not normalize them. So I need to run more than one test. One of these days, I
+                # could probably just examine the database settings, figure out which DB we use
+                # and then do just a single correct test.
+                #
+                # Just to complicates things a bit, the actual error message is not always in
+                # e.message, but may be in the args of the exception. The args list can vary
+                # in length, but so far it seems that the message is always the last one in
+                # the args list. So, that's where I get the message string from. Then I do my
+                # DB specific tests on the message string.
+                #
+                msg = e.args[len(e.args)-1]
+                if msg.endswith("for key 'PRIMARY'") or msg == "column id is not unique" or \
+                        "Key (id)=" in msg:
+                    transaction.savepoint_rollback(sid) # Needs to be done for Postgres, since
+                                                        # otherwise the whole transaction is
+                                                        # cancelled, if this is part of a larger
+                                                        # transaction.
+
+                    self._retry_count += 1              # Maintained for debugging/testing purposes
+                    try_since_last_key_len_increase += 1
+                    if try_since_last_key_len_increase == try_key_len:
+                        # Every key-len tries, we increase the key length by 1.
+                        # This means we only try a few times at the start, but then try more
+                        # and more for larger key sizes.
+                        try_key_len += 1
+                        try_since_last_key_len_increase = 0
+                else:
+                    # Some other IntegrityError? Need to re-raise it...
+                    raise e
 
         else:
             # while ... else (just as a reminder): Execute 'else' if while loop is exited normally.
