@@ -122,7 +122,7 @@ class RandomPrimaryIdModel(models.Model):
 
         """
         return self.KEYPREFIX + random.choice(self._FIRSTIDCHAR) + \
-               ''.join([ random.choice(self._IDCHARS) for dummy in xrange(0, key_len-1) ]) + \
+               ''.join([ random.choice(self._IDCHARS) for dummy in range(0, key_len-1) ]) + \
                self.KEYSUFFIX
 
     def save(self, *args, **kwargs):
